@@ -2,6 +2,9 @@ const express = require('express');
 const cors = require('cors');
 const puppeteer = require('puppeteer');
 
+// --- HUELLA DIGITAL ---
+console.log("--- Running Detective Profesional v3 ---");
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -31,7 +34,6 @@ app.get('/scrape', async (req, res) => {
         const page = await browser.newPage();
         
         const streamUrl = await new Promise(async (resolve, reject) => {
-            // Ponemos un temporizador. Si en 25 segundos no encontramos nada, fallamos.
             const timeout = setTimeout(() => {
                 reject(new Error('Tiempo de espera agotado. No se encontró el stream.'));
             }, 25000);
@@ -39,8 +41,8 @@ app.get('/scrape', async (req, res) => {
             const findStream = (request) => {
                 if (request.url().includes('.m3u8')) {
                     console.log('¡Stream .m3u8 encontrado! ->', request.url());
-                    clearTimeout(timeout); // Cancelamos el temporizador
-                    resolve(request.url()); // Devolvemos la URL
+                    clearTimeout(timeout);
+                    resolve(request.url());
                 } else {
                     request.continue();
                 }
@@ -65,7 +67,6 @@ app.get('/scrape', async (req, res) => {
         if (streamUrl) {
             res.json({ streamUrl: streamUrl });
         } else {
-            // Esto ya no debería ocurrir gracias al timeout, pero lo dejamos por seguridad
             res.status(404).json({ error: 'No se pudo encontrar un stream .m3u8 en la página.' });
         }
 
@@ -83,4 +84,3 @@ app.get('/scrape', async (req, res) => {
 app.listen(PORT, () => {
     console.log(`Servidor escuchando en el puerto ${PORT}`);
 });
-
