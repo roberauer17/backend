@@ -3,7 +3,7 @@ const cors = require('cors');
 const puppeteer = require('puppeteer');
 
 // --- HUELLA DIGITAL ---
-console.log("--- Running Detective Profesional v3 ---");
+console.log("--- Running Detective Paranoico v4 ---");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -19,6 +19,7 @@ app.get('/scrape', async (req, res) => {
 
     console.log(`Iniciando scraping para: ${urlToScrape}`);
     let browser = null;
+    let responseSent = false; // Flag para asegurarnos de que solo enviamos una respuesta
 
     try {
         browser = await puppeteer.launch({
@@ -32,51 +33,62 @@ app.get('/scrape', async (req, res) => {
         });
         
         const page = await browser.newPage();
-        
-        const streamUrl = await new Promise(async (resolve, reject) => {
-            const timeout = setTimeout(() => {
-                reject(new Error('Tiempo de espera agotado. No se encontró el stream.'));
-            }, 25000);
 
-            const findStream = (request) => {
-                if (request.url().includes('.m3u8')) {
-                    console.log('¡Stream .m3u8 encontrado! ->', request.url());
-                    clearTimeout(timeout);
-                    resolve(request.url());
-                } else {
-                    request.continue();
-                }
-            };
-
-            page.on('request', findStream);
-            await page.setRequestInterception(true);
-
-            await page.goto(urlToScrape, { waitUntil: 'networkidle2', timeout: 60000 });
-
-            const iframe = await page.$('iframe');
-            if (iframe) {
-                console.log('Iframe encontrado, buscando stream dentro...');
-                const frame = await iframe.contentFrame();
-                if (frame) {
-                    frame.on('request', findStream);
-                    await frame.setRequestInterception(true);
-                }
+        // Creamos un temporizador. Si en 25 segundos no hemos enviado respuesta, fallamos.
+        const timeout = setTimeout(() => {
+            if (!responseSent) {
+                console.log('Tiempo de espera agotado.');
+                res.status(404).json({ error: 'No se pudo encontrar un stream en el tiempo límite.' });
+                responseSent = true;
             }
-        });
+        }, 25000);
 
-        if (streamUrl) {
-            res.json({ streamUrl: streamUrl });
-        } else {
-            res.status(404).json({ error: 'No se pudo encontrar un stream .m3u8 en la página.' });
+        const findStreamAndRespond = (request) => {
+            // Si encontramos el stream Y NO hemos enviado ya la respuesta...
+            if (request.url().includes('.m3u8') && !responseSent) {
+                console.log('¡Stream .m3u8 encontrado! ->', request.url());
+                responseSent = true; // Marcamos que ya hemos respondido
+                clearTimeout(timeout); // Cancelamos el temporizador
+                
+                // ¡LA CLAVE ESTÁ AQUÍ! Enviamos la respuesta inmediatamente.
+                res.json({ streamUrl: request.url() });
+                
+                // Intentamos que el resto del código no siga ejecutándose, pero no es crítico.
+                page.removeListener('request', findStreamAndRespond);
+            }
+            // Si no es el stream, la petición continúa normalmente.
+            else if (!request.isInterceptResolutionHandled()) {
+                 request.continue();
+            }
+        };
+
+        page.on('request', findStreamAndRespond);
+        await page.setRequestInterception(true);
+        await page.goto(urlToScrape, { waitUntil: 'networkidle2', timeout: 60000 });
+
+        const iframe = await page.$('iframe');
+        if (iframe) {
+            console.log('Iframe encontrado, buscando stream dentro...');
+            const frame = await iframe.contentFrame();
+            if (frame) {
+                frame.on('request', findStreamAndRespond);
+                await frame.setRequestInterception(true);
+            }
         }
 
     } catch (error) {
         console.error('Error durante el scraping:', error.message);
-        res.status(500).json({ error: `Ocurrió un error en el servidor: ${error.message}` });
+        if (!responseSent) {
+            res.status(500).json({ error: `Ocurrió un error en el servidor: ${error.message}` });
+            responseSent = true;
+        }
     } finally {
         if (browser) {
-            await browser.close();
-            console.log('Navegador cerrado.');
+            // Esperamos un poco antes de cerrar para asegurar que la respuesta se envíe
+            setTimeout(() => {
+                browser.close();
+                console.log('Navegador cerrado.');
+            }, 2000);
         }
     }
 });
