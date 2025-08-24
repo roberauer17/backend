@@ -2,8 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const puppeteer = require('puppeteer');
 
-// --- HUELLA DIGITAL ---
-console.log("--- Running Detective Paranoico v4 ---");
+console.log("--- Running Detective Final v5 ---");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -19,7 +18,7 @@ app.get('/scrape', async (req, res) => {
 
     console.log(`Iniciando scraping para: ${urlToScrape}`);
     let browser = null;
-    let responseSent = false; // Flag para asegurarnos de que solo enviamos una respuesta
+    let responseSent = false;
 
     try {
         browser = await puppeteer.launch({
@@ -34,7 +33,6 @@ app.get('/scrape', async (req, res) => {
         
         const page = await browser.newPage();
 
-        // Creamos un temporizador. Si en 25 segundos no hemos enviado respuesta, fallamos.
         const timeout = setTimeout(() => {
             if (!responseSent) {
                 console.log('Tiempo de espera agotado.');
@@ -44,19 +42,17 @@ app.get('/scrape', async (req, res) => {
         }, 25000);
 
         const findStreamAndRespond = (request) => {
-            // Si encontramos el stream Y NO hemos enviado ya la respuesta...
             if (request.url().includes('.m3u8') && !responseSent) {
                 console.log('¡Stream .m3u8 encontrado! ->', request.url());
-                responseSent = true; // Marcamos que ya hemos respondido
-                clearTimeout(timeout); // Cancelamos el temporizador
+                responseSent = true;
+                clearTimeout(timeout);
                 
-                // ¡LA CLAVE ESTÁ AQUÍ! Enviamos la respuesta inmediatamente.
                 res.json({ streamUrl: request.url() });
                 
-                // Intentamos que el resto del código no siga ejecutándose, pero no es crítico.
-                page.removeListener('request', findStreamAndRespond);
+                // --- CORRECCIÓN AQUÍ ---
+                // La función correcta es 'off', no 'removeListener'
+                page.off('request', findStreamAndRespond);
             }
-            // Si no es el stream, la petición continúa normalmente.
             else if (!request.isInterceptResolutionHandled()) {
                  request.continue();
             }
@@ -71,6 +67,7 @@ app.get('/scrape', async (req, res) => {
             console.log('Iframe encontrado, buscando stream dentro...');
             const frame = await iframe.contentFrame();
             if (frame) {
+                // También aplicamos el listener al frame
                 frame.on('request', findStreamAndRespond);
                 await frame.setRequestInterception(true);
             }
@@ -84,7 +81,6 @@ app.get('/scrape', async (req, res) => {
         }
     } finally {
         if (browser) {
-            // Esperamos un poco antes de cerrar para asegurar que la respuesta se envíe
             setTimeout(() => {
                 browser.close();
                 console.log('Navegador cerrado.');
