@@ -3,11 +3,11 @@ const cors = require('cors');
 const puppeteer = require('puppeteer');
 
 const app = express();
-const PORT = process.env.PORT || 6000;
+const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 
-app.get('/scrape', async (req, res) => { // La función ahora es 'async' para usar Puppeteer
+app.get('/scrape', async (req, res) => {
     const urlToScrape = req.query.url;
 
     if (!urlToScrape) {
@@ -18,7 +18,6 @@ app.get('/scrape', async (req, res) => { // La función ahora es 'async' para us
     let browser = null;
 
     try {
-        // 1. Lanzamos un navegador invisible en el servidor
         browser = await puppeteer.launch({
             args: [
                 '--no-sandbox',
@@ -26,38 +25,55 @@ app.get('/scrape', async (req, res) => { // La función ahora es 'async' para us
                 '--disable-dev-shm-usage',
                 '--single-process'
             ],
-            headless: true // 'true' significa que no tiene interfaz gráfica
+            headless: true
         });
-
+        
         const page = await browser.newPage();
+        
+        // --- ESTRATEGIA MEJORADA ---
+        // Creamos una "promesa" que se resolverá cuando encontremos la URL
+        const streamUrlPromise = new Promise(async (resolve, reject) => {
+            page.on('request', (request) => {
+                if (request.url().includes('.m3u8')) {
+                    console.log('¡Stream .m3u8 encontrado! ->', request.url());
+                    resolve(request.url()); // Resolvemos la promesa con la URL
+                }
+                request.continue();
+            });
 
-        let foundStreamUrl = null;
+            // Navegamos a la página
+            await page.setRequestInterception(true);
+            await page.goto(urlToScrape, { waitUntil: 'networkidle2', timeout: 60000 });
 
-        // 2. Le decimos a la página que nos avise de todas las peticiones de red
-        await page.setRequestInterception(true);
-        page.on('request', (request) => {
-            // 3. Si una petición es a un archivo .m3u8, la guardamos y dejamos de interceptar
-            if (request.url().endsWith('.m3u8') && !foundStreamUrl) {
-                console.log('¡Stream .m3u8 encontrado! ->', request.url());
-                foundStreamUrl = request.url();
-                page.setRequestInterception(false); // Optimización: ya tenemos lo que queremos
+            // Buscamos si hay un iframe en la página
+            const iframe = await page.$('iframe');
+            if (iframe) {
+                console.log('Iframe encontrado, buscando stream dentro...');
+                const frame = await iframe.contentFrame();
+                if (frame) {
+                    // Si encontramos el iframe, también interceptamos sus peticiones
+                    await frame.setRequestInterception(true);
+                    frame.on('request', (request) => {
+                        if (request.url().includes('.m3u8')) {
+                            console.log('¡Stream .m3u8 encontrado DENTRO del iframe! ->', request.url());
+                            resolve(request.url());
+                        }
+                        request.continue();
+                    });
+                }
             }
-            request.continue();
         });
 
-        // 4. Visitamos la página que nos pidió el usuario
-        await page.goto(urlToScrape, { waitUntil: 'networkidle2', timeout: 30000 });
+        // Esperamos a que la promesa se resuelva, con un tiempo límite
+        const foundStreamUrl = await Promise.race([
+            streamUrlPromise,
+            new Promise(resolve => setTimeout(() => resolve(null), 15000)) // 15 segundos de espera total
+        ]);
 
-        // 5. A veces el stream tarda en cargar, le damos unos segundos extra por si acaso
-        if (!foundStreamUrl) {
-            console.log('Stream no encontrado de inmediato, esperando 5 segundos más...');
-            await new Promise(resolve => setTimeout(resolve, 5000));
-        }
-
-        // 6. Respondemos al usuario con el enlace encontrado o con un error
         if (foundStreamUrl) {
             res.json({ streamUrl: foundStreamUrl });
         } else {
+            console.log('No se encontró stream tras 15 segundos.');
             res.status(404).json({ error: 'No se pudo encontrar un stream .m3u8 en la página.' });
         }
 
@@ -65,7 +81,6 @@ app.get('/scrape', async (req, res) => { // La función ahora es 'async' para us
         console.error('Error durante el scraping:', error);
         res.status(500).json({ error: 'Ocurrió un error en el servidor al procesar la página.' });
     } finally {
-        // 7. Cerramos el navegador para liberar recursos
         if (browser) {
             await browser.close();
             console.log('Navegador cerrado.');
@@ -75,5 +90,4 @@ app.get('/scrape', async (req, res) => { // La función ahora es 'async' para us
 
 app.listen(PORT, () => {
     console.log(`Servidor escuchando en el puerto ${PORT}`);
-
 });
