@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const puppeteer = require('puppeteer');
 
-console.log("--- Running Detective Final v5 ---");
+console.log("--- Running Detective Final y Limpio v6 ---");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -49,8 +49,6 @@ app.get('/scrape', async (req, res) => {
                 
                 res.json({ streamUrl: request.url() });
                 
-                // --- CORRECCIÓN AQUÍ ---
-                // La función correcta es 'off', no 'removeListener'
                 page.off('request', findStreamAndRespond);
             }
             else if (!request.isInterceptResolutionHandled()) {
@@ -60,17 +58,15 @@ app.get('/scrape', async (req, res) => {
 
         page.on('request', findStreamAndRespond);
         await page.setRequestInterception(true);
+
         await page.goto(urlToScrape, { waitUntil: 'networkidle2', timeout: 60000 });
 
+        // --- CORRECCIÓN FINAL AQUÍ ---
+        // El listener de la página principal ya escucha los iframes.
+        // No necesitamos hacer nada más especial con el iframe.
         const iframe = await page.$('iframe');
         if (iframe) {
-            console.log('Iframe encontrado, buscando stream dentro...');
-            const frame = await iframe.contentFrame();
-            if (frame) {
-                // También aplicamos el listener al frame
-                frame.on('request', findStreamAndRespond);
-                await frame.setRequestInterception(true);
-            }
+            console.log('Iframe encontrado. El listener principal se encargará.');
         }
 
     } catch (error) {
@@ -92,3 +88,4 @@ app.get('/scrape', async (req, res) => {
 app.listen(PORT, () => {
     console.log(`Servidor escuchando en el puerto ${PORT}`);
 });
+
