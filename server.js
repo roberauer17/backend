@@ -30,56 +30,48 @@ app.get('/scrape', async (req, res) => {
         
         const page = await browser.newPage();
         
-        // --- ESTRATEGIA MEJORADA ---
-        // Creamos una "promesa" que se resolverá cuando encontremos la URL
-        const streamUrlPromise = new Promise(async (resolve, reject) => {
-            page.on('request', (request) => {
+        const streamUrl = await new Promise(async (resolve, reject) => {
+            // Ponemos un temporizador. Si en 25 segundos no encontramos nada, fallamos.
+            const timeout = setTimeout(() => {
+                reject(new Error('Tiempo de espera agotado. No se encontró el stream.'));
+            }, 25000);
+
+            const findStream = (request) => {
                 if (request.url().includes('.m3u8')) {
                     console.log('¡Stream .m3u8 encontrado! ->', request.url());
-                    resolve(request.url()); // Resolvemos la promesa con la URL
+                    clearTimeout(timeout); // Cancelamos el temporizador
+                    resolve(request.url()); // Devolvemos la URL
+                } else {
+                    request.continue();
                 }
-                request.continue();
-            });
+            };
 
-            // Navegamos a la página
+            page.on('request', findStream);
             await page.setRequestInterception(true);
+
             await page.goto(urlToScrape, { waitUntil: 'networkidle2', timeout: 60000 });
 
-            // Buscamos si hay un iframe en la página
             const iframe = await page.$('iframe');
             if (iframe) {
                 console.log('Iframe encontrado, buscando stream dentro...');
                 const frame = await iframe.contentFrame();
                 if (frame) {
-                    // Si encontramos el iframe, también interceptamos sus peticiones
+                    frame.on('request', findStream);
                     await frame.setRequestInterception(true);
-                    frame.on('request', (request) => {
-                        if (request.url().includes('.m3u8')) {
-                            console.log('¡Stream .m3u8 encontrado DENTRO del iframe! ->', request.url());
-                            resolve(request.url());
-                        }
-                        request.continue();
-                    });
                 }
             }
         });
 
-        // Esperamos a que la promesa se resuelva, con un tiempo límite
-        const foundStreamUrl = await Promise.race([
-            streamUrlPromise,
-            new Promise(resolve => setTimeout(() => resolve(null), 15000)) // 15 segundos de espera total
-        ]);
-
-        if (foundStreamUrl) {
-            res.json({ streamUrl: foundStreamUrl });
+        if (streamUrl) {
+            res.json({ streamUrl: streamUrl });
         } else {
-            console.log('No se encontró stream tras 15 segundos.');
+            // Esto ya no debería ocurrir gracias al timeout, pero lo dejamos por seguridad
             res.status(404).json({ error: 'No se pudo encontrar un stream .m3u8 en la página.' });
         }
 
     } catch (error) {
-        console.error('Error durante el scraping:', error);
-        res.status(500).json({ error: 'Ocurrió un error en el servidor al procesar la página.' });
+        console.error('Error durante el scraping:', error.message);
+        res.status(500).json({ error: `Ocurrió un error en el servidor: ${error.message}` });
     } finally {
         if (browser) {
             await browser.close();
@@ -91,3 +83,4 @@ app.get('/scrape', async (req, res) => {
 app.listen(PORT, () => {
     console.log(`Servidor escuchando en el puerto ${PORT}`);
 });
+
